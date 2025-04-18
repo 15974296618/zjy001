@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: "0 */1 * * *"  # 每小时运行一次（UTC时间）
+    - cron: "0 */1 * * *"  
 
 permissions:
   contents: write
@@ -63,7 +63,7 @@ jobs:
 
           mv worker.js origin.js
 
-      - name: Obfuscate BPB worker js  # 严格保留原混淆参数
+      - name: Obfuscate BPB worker js  
         run: |
           javascript-obfuscator origin.js --output _worker.js \
           --compact true \
@@ -71,10 +71,7 @@ jobs:
           --rename-globals true \
           --string-array true \
           --string-array-encoding 'base64' \
-          --string-array-threshold 0.75 \
-          --transform-object-keys true \
-          --self-defending false \
-          --simplify true
+          --string-array-threshold 0.75
 
       - name: Commit changes
         run: |
