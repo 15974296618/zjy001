@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: "0 */1 * * *"
+    - cron: "0 */1 * * *"  # 每小时运行一次（UTC时间）
 
 permissions:
   contents: write
@@ -21,13 +21,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "latest"
 
       - name: Install dependencies
         run: |
-          npm install -g javascript-obfuscator terser
-          sudo apt-get update
-          sudo apt-get install -y unzip jq sed
+          npm install -g javascript-obfuscator
 
       - name: Get latest test version
         id: get-version
@@ -45,90 +43,43 @@ jobs:
             exit 1
           fi
 
+          echo "Latest test version: $LATEST_TAG"
           echo "LATEST_VERSION=$LATEST_TAG" >> $GITHUB_ENV
 
-      - name: Download and extract
+      - name: Download worker.js
         run: |
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "::error::Version not set!"
+            exit 1
+          fi
+
           wget -q --show-progress \
-            "https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/${{ env.LATEST_VERSION }}/worker.zip"
+            "https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/${{ env.LATEST_VERSION }}/worker.js"
 
-          unzip -o worker.zip
-          test -f _worker.js || { echo "::error::_worker.js not extracted!"; exit 1; }
-          cp _worker.js origin.js
-
-      - name: Debug Original Code
-        run: |
-          echo "=== Original Code Structure ==="
-          grep -n "addEventListener.*fetch" origin.js || echo "Pattern not found"
-          echo "==============================="
-
-      - name: Optimize Code Structure
-        run: |
-          # 增强型正则表达式 + 显式换行符
-          sed -i "s/addEventListener\(['\"]fetch['\"]\),[[:space:]]*async[[:space:]]*[a-zA-Z]*[[:space:]]*=>[[:space:]]*{/addEventListener('fetch', event => {$(printf '\n  ')event.waitUntil((async () => {$(printf '\n    ')if (!globalThis.core) {$(printf '\n      ')globalThis.core = await import('.\/core.js');$(printf '\n    ')} })(\));/g" origin.js
-
-          # 调试修改后的代码
-          echo "=== Modified Code Structure ==="
-          grep -A 5 "event.waitUntil" origin.js || :
-          echo "==============================="
-
-          # 增强验证
-          if ! grep -q "event\.waitUntil" origin.js; then
-            echo "::error::Code injection failed!"
+          if [ ! -f worker.js ]; then
+            echo "::error::Download failed!"
             exit 1
           fi
 
-      - name: Obfuscate BPB worker js
-        run: |
-          javascript-obfuscator origin.js --output _worker.tmp.js \
-            --compact true \
-            --identifier-names-generator hexadecimal \
-            --rename-globals true \
-            --string-array true \
-            --string-array-encoding 'base64' \
-            --string-array-threshold 0.5 \
-            --simplify true \
-            --disable-console-output true
+          mv worker.js origin.js
 
-      - name: Minify Code
+      - name: Obfuscate BPB worker js  # 严格保留原混淆参数
         run: |
-          terser _worker.tmp.js --compress sequences=true,conditionals=true,booleans=true --mangle -o _worker.js
-          rm _worker.tmp.js
-
-      - name: Verify File Size
-        run: |
-          FILESIZE=$(stat -c%s "_worker.js")
-          MAX_SIZE=$((1024*1024))
-          if [ $FILESIZE -gt $MAX_SIZE ]; then
-            echo "::error::File size exceeds 1MB (Actual: $((FILESIZE/1024))KB)"
-            exit 1
-          fi
+          javascript-obfuscator origin.js --output _worker.js \
+          --compact true \
+          --identifier-names-generator hexadecimal \
+          --rename-globals true \
+          --string-array true \
+          --string-array-encoding 'base64' \
+          --string-array-threshold 0.75 \
+          --transform-object-keys true \
+          --self-defending false \
+          --simplify true
 
       - name: Commit changes
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
-          
-          if git diff --quiet; then
-            echo "No changes to commit"
-          else
-            git add _worker.js
-            git commit -m "Optimized update: ${{ env.LATEST_VERSION }} (Size: $(stat -c%s _worker.js) bytes)"
-            git push
-          fi
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Deploy to Cloudflare
-        uses: cloudflare/pages-action@1
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: "bpb-worker-panel"
-          directory: ./
-          wranglerVersion: "3"
-        timeout-minutes: 5
+          git add _worker.js
+          git commit -m "Auto update: ${{ env.LATEST_VERSION }}"
+          git push
