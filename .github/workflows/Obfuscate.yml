@@ -1,0 +1,134 @@
+name: Build Obfuscate BPB Panel
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 */1 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          npm install -g javascript-obfuscator terser
+          sudo apt-get update
+          sudo apt-get install -y unzip jq sed
+
+      - name: Get latest test version
+        id: get-version
+        run: |
+          API_URL="https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases"
+          LATEST_TAG=$(curl -s $API_URL | jq -r '
+            map(select(.prerelease == true)) |
+            sort_by(.published_at) | 
+            reverse | 
+            .[0].tag_name
+          ')
+
+          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" = "null" ]; then
+            echo "::error::No test version found!"
+            exit 1
+          fi
+
+          echo "LATEST_VERSION=$LATEST_TAG" >> $GITHUB_ENV
+
+      - name: Download and extract
+        run: |
+          wget -q --show-progress \
+            "https://github.com/bia-pain-bache/BPB-Worker-Panel/releases/download/${{ env.LATEST_VERSION }}/worker.zip"
+
+          unzip -o worker.zip
+          test -f _worker.js || { echo "::error::_worker.js not extracted!"; exit 1; }
+          cp _worker.js origin.js
+
+      - name: Debug Original Code
+        run: |
+          echo "=== Original Code Structure ==="
+          grep -n "addEventListener.*fetch" origin.js || echo "Pattern not found"
+          echo "==============================="
+
+      - name: Optimize Code Structure
+        run: |
+          # 增强型正则表达式 + 显式换行符
+          sed -i "s/addEventListener\(['\"]fetch['\"]\),[[:space:]]*async[[:space:]]*[a-zA-Z]*[[:space:]]*=>[[:space:]]*{/addEventListener('fetch', event => {$(printf '\n  ')event.waitUntil((async () => {$(printf '\n    ')if (!globalThis.core) {$(printf '\n      ')globalThis.core = await import('.\/core.js');$(printf '\n    ')} })(\));/g" origin.js
+
+          # 调试修改后的代码
+          echo "=== Modified Code Structure ==="
+          grep -A 5 "event.waitUntil" origin.js || :
+          echo "==============================="
+
+          # 增强验证
+          if ! grep -q "event\.waitUntil" origin.js; then
+            echo "::error::Code injection failed!"
+            exit 1
+          fi
+
+      - name: Obfuscate BPB worker js
+        run: |
+          javascript-obfuscator origin.js --output _worker.tmp.js \
+            --compact true \
+            --identifier-names-generator hexadecimal \
+            --rename-globals true \
+            --string-array true \
+            --string-array-encoding 'base64' \
+            --string-array-threshold 0.5 \
+            --simplify true \
+            --disable-console-output true
+
+      - name: Minify Code
+        run: |
+          terser _worker.tmp.js --compress sequences=true,conditionals=true,booleans=true --mangle -o _worker.js
+          rm _worker.tmp.js
+
+      - name: Verify File Size
+        run: |
+          FILESIZE=$(stat -c%s "_worker.js")
+          MAX_SIZE=$((1024*1024))
+          if [ $FILESIZE -gt $MAX_SIZE ]; then
+            echo "::error::File size exceeds 1MB (Actual: $((FILESIZE/1024))KB)"
+            exit 1
+          fi
+
+      - name: Commit changes
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add _worker.js
+            git commit -m "Optimized update: ${{ env.LATEST_VERSION }} (Size: $(stat -c%s _worker.js) bytes)"
+            git push
+          fi
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Cloudflare
+        uses: cloudflare/pages-action@1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: "bpb-worker-panel"
+          directory: ./
+          wranglerVersion: "3"
+        timeout-minutes: 5
