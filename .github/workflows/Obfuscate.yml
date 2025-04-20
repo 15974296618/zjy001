@@ -13,6 +13,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency: ci-${{ github.ref }}
 
     steps:
       - name: Check out the code
@@ -33,12 +35,10 @@ jobs:
       - name: Fetch latest release info
         id: fetch_release
         run: |
-          # Fetch both latest release and pre-release
           RELEASE_INFO=$(curl -s https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases)
           LATEST_RELEASE=$(echo "$RELEASE_INFO" | jq -r '.[0]')
           LATEST_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r 'map(select(.prerelease == true)) | .[0]')
 
-          # Compare versions and select the latest one
           LATEST_VERSION=$(echo "$LATEST_RELEASE" | jq -r '.tag_name')
           PRERELEASE_VERSION=$(echo "$LATEST_PRERELEASE" | jq -r '.tag_name')
 
@@ -50,7 +50,6 @@ jobs:
             RELEASE_TYPE="正式版"
           fi
 
-          # Extract download URL and version
           DOWNLOAD_URL=$(echo "$SELECTED_RELEASE" | jq -r '.assets[] | select(.name == "worker.js") | .browser_download_url')
           VERSION=$(echo "$SELECTED_RELEASE" | jq -r '.tag_name')
 
@@ -59,7 +58,6 @@ jobs:
             exit 1
           fi
 
-          # Output variables for later steps
           echo "DOWNLOAD_URL=$DOWNLOAD_URL" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "RELEASE_TYPE=$RELEASE_TYPE" >> $GITHUB_ENV
@@ -88,19 +86,26 @@ jobs:
           ls -l origin.js
           head -n 10 origin.js
 
+      - name: Cache obfuscated worker.js
+        id: cache-worker
+        uses: actions/cache@v3
+        with:
+          path: _worker.js
+          key: worker-${{ env.VERSION }}
+
       - name: Obfuscate BPB worker js
-        if: env.SKIP_DOWNLOAD == 'false'
+        if: env.SKIP_DOWNLOAD == 'false' && steps.cache-worker.outputs.cache-hit != 'true'
         run: |
+          echo "Starting obfuscation..."
           javascript-obfuscator origin.js --output _worker.js \
             --compact true \
             --identifier-names-generator hexadecimal \
             --rename-globals true \
-            --string-array true \
-            --string-array-encoding 'base64' \
-            --string-array-threshold 0.75 \
-            --transform-object-keys true \
+            --string-array false \
+            --transform-object-keys false \
             --self-defending false \
             --simplify true
+          echo "Obfuscation completed."
           ls -l _worker.js
           head -n 10 _worker.js
 
