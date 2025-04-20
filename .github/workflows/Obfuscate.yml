@@ -30,6 +30,7 @@ jobs:
           sudo apt-get install -y jq
 
       - name: Fetch and download latest worker.js
+        id: fetch
         run: |
           # Get the latest release info from GitHub API
           LATEST_RELEASE=$(curl -s https://api.github.com/repos/bia-pain-bache/BPB-Worker-Panel/releases/latest)
@@ -45,12 +46,16 @@ jobs:
           if [ "$PRERELEASE_VERSION" \> "$LATEST_VERSION" ]; then
             DOWNLOAD_URL="$PRERELEASE_URL"
             VERSION="$PRERELEASE_VERSION"
-            IS_PRERELEASE=true
+            RELEASE_TYPE="测试版"
           else
             DOWNLOAD_URL="$LATEST_URL"
             VERSION="$LATEST_VERSION"
-            IS_PRERELEASE=false
+            RELEASE_TYPE="正式版"
           fi
+
+          # Set environment variables for commit message
+          echo "RELEASE_TYPE=$RELEASE_TYPE" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
           # Download the file
           wget -O origin.js "$DOWNLOAD_URL"
@@ -76,7 +81,6 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: main
-          commit_message: |
-            ${{ steps.fetch.outputs.IS_PRERELEASE && '更新到测试版 bpb 面板 ' || '更新到正式版 bpb 面板 ' }}${{ steps.fetch.outputs.VERSION }}
+          commit_message: ":arrow_up: 更新到${{ env.RELEASE_TYPE }} bpb 面板 ${{ env.VERSION }} ✅"
           commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
           push_options: '--set-upstream'
